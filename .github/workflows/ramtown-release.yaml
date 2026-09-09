@@ -1,0 +1,218 @@
+# Ramtown build of TextBee.
+#
+# This is the only workflow that should run on this fork. It builds three
+# things from the unmodified upstream source, swapping textbee.dev for our
+# own domain at build time, so "Sync fork" never conflicts:
+#
+#   1. The Android app, signed with our key, published as a GitHub Release.
+#      Obtainium on the office phone watches those releases and installs them.
+#   2. The API image, pushed to ghcr.io/<owner>/textbee/api:ramtown.
+#   3. The web dashboard image, pushed to ghcr.io/<owner>/textbee/web:ramtown.
+#      Next.js bakes NEXT_PUBLIC_* at build time, so the dashboard must be
+#      built with our URLs. That is why we cannot use upstream's image.
+#
+# Repository variables (Settings -> Secrets and variables -> Actions -> Variables):
+#   TEXTBEE_API_URL   e.g. https://sms-api.example.com   (no trailing slash)
+#   TEXTBEE_WEB_URL   e.g. https://sms.example.com       (no trailing slash)
+#
+# Repository secrets:
+#   ANDROID_KEYSTORE_B64        base64 of the PKCS12 signing keystore
+#   GOOGLE_SERVICES_JSON_PROD   google-services.json from the Firebase project,
+#                               Android app package name com.vernu.sms
+
+name: Ramtown release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - 'api/**'
+      - 'web/**'
+      - '.github/workflows/ramtown-release.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: ramtown-release
+  cancel-in-progress: true
+
+env:
+  API_URL: ${{ vars.TEXTBEE_API_URL }}
+  WEB_URL: ${{ vars.TEXTBEE_WEB_URL }}
+
+jobs:
+  check:
+    name: Check configuration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require URLs and secrets
+        env:
+          HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_B64 != '' }}
+          HAS_GOOGLE_SERVICES: ${{ secrets.GOOGLE_SERVICES_JSON_PROD != '' }}
+        run: |
+          fail=0
+          [ -n "$API_URL" ] || { echo "::error::Repository variable TEXTBEE_API_URL is not set"; fail=1; }
+          [ -n "$WEB_URL" ] || { echo "::error::Repository variable TEXTBEE_WEB_URL is not set"; fail=1; }
+          [ "$HAS_KEYSTORE" = "true" ] || { echo "::error::Secret ANDROID_KEYSTORE_B64 is not set"; fail=1; }
+          [ "$HAS_GOOGLE_SERVICES" = "true" ] || { echo "::error::Secret GOOGLE_SERVICES_JSON_PROD is not set (Firebase -> Project settings -> Your apps -> google-services.json)"; fail=1; }
+          exit $fail
+
+  android:
+    name: Android app
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      version_code: ${{ steps.ver.outputs.code }}
+      version_name: ${{ steps.ver.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Point the app at our server
+        run: |
+          set -e
+          f=android/app/build.gradle
+          grep -q 'https://api.textbee.dev/api/v1/' "$f"
+          sed -i "s#https://api.textbee.dev/api/v1/#${API_URL}/api/v1/#" "$f"
+          sed -i 's#resValue "string", "app_name", "textbee.dev"$#resValue "string", "app_name", "Ramtown SMS"#' "$f"
+          # In-app links to the hosted dashboard go to ours instead.
+          grep -rl 'https://app.textbee.dev' android/app/src/main | xargs -r sed -i "s#https://app.textbee.dev#${WEB_URL}#g"
+          echo "API_BASE_URL now:"; grep 'API_BASE_URL' "$f"
+
+      - name: Write Firebase config
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON_PROD }}
+        run: |
+          mkdir -p android/app/src/prod
+          printf '%s' "$GOOGLE_SERVICES_JSON" > android/app/src/prod/google-services.json
+
+      - name: Write signing key
+        # build.gradle signs release builds with ~/.android/debug.keystore,
+        # alias androiddebugkey, password android. Our keystore is generated
+        # with exactly those so the Gradle file stays untouched. The keystore
+        # file itself is the secret.
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          mkdir -p ~/.android
+          echo "$KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+
+      - name: Read version
+        id: ver
+        run: |
+          code=$(grep -oP 'versionCode\s+\K\d+' android/app/build.gradle)
+          name=$(grep -oP 'versionName\s+"\K[^"]+' android/app/build.gradle)
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "TextBee $name ($code)"
+
+      - name: Build
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleProdRelease --no-daemon
+
+      - name: Collect APK
+        run: |
+          src=android/app/build/outputs/apk/prod/release/app-prod-release.apk
+          ls -la "$(dirname "$src")"
+          cp "$src" "ramtown-sms-v${{ steps.ver.outputs.name }}.apk"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: android-v${{ steps.ver.outputs.name }}
+          APK: ramtown-sms-v${{ steps.ver.outputs.name }}.apk
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --clobber
+          else
+            gh release create "$TAG" "$APK" \
+              --title "Ramtown SMS ${{ steps.ver.outputs.name }}" \
+              --notes "TextBee ${{ steps.ver.outputs.name }} (versionCode ${{ steps.ver.outputs.code }}) built for ${API_URL}. Install with Obtainium."
+          fi
+
+  images:
+    name: Server images
+    needs: [check, android]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image names
+        id: names
+        run: |
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "api=ghcr.io/${owner}/textbee/api" >> "$GITHUB_OUTPUT"
+          echo "web=ghcr.io/${owner}/textbee/web" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Bake dashboard URLs
+        # Next.js reads web/.env during `pnpm build` inside the Dockerfile.
+        # Only NEXT_PUBLIC_* matter here; runtime secrets come from the box.
+        run: |
+          cat > web/.env <<EOF
+          NEXT_PUBLIC_SITE_URL=${WEB_URL}
+          NEXT_PUBLIC_API_BASE_URL=${API_URL}/api/v1
+          NEXT_PUBLIC_LATEST_APP_VERSION_CODE=${{ needs.android.outputs.version_code }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY=1x00000000000000000000AA
+          NEXT_PUBLIC_BULK_RECIPIENT_WARN_THRESHOLD=500
+          EOF
+          cat web/.env
+
+      - name: Build and push API
+        uses: docker/build-push-action@v6
+        with:
+          context: api
+          push: true
+          platforms: linux/amd64
+          build-args: VERSION=${{ steps.names.outputs.sha }}
+          tags: |
+            ${{ steps.names.outputs.api }}:ramtown
+            ${{ steps.names.outputs.api }}:ramtown-${{ steps.names.outputs.sha }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+
+      - name: Build and push web
+        uses: docker/build-push-action@v6
+        with:
+          context: web
+          push: true
+          platforms: linux/amd64
+          build-args: VERSION=${{ steps.names.outputs.sha }}
+          tags: |
+            ${{ steps.names.outputs.web }}:ramtown
+            ${{ steps.names.outputs.web }}:ramtown-${{ steps.names.outputs.sha }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
+
+      - name: Summary
+        run: |
+          {
+            echo "## Ramtown TextBee build"
+            echo
+            echo "- APK: release \`android-v${{ needs.android.outputs.version_name }}\`"
+            echo "- API image: \`${{ steps.names.outputs.api }}:ramtown\`"
+            echo "- Web image: \`${{ steps.names.outputs.web }}:ramtown\`"
+            echo "- Built for API \`${API_URL}\`, dashboard \`${WEB_URL}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
