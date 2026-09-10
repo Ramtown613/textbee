@@ -166,6 +166,8 @@ def web() -> None:
         # Google Analytics and Microsoft Clarity session recording, tagged with the
         # signed-in user's e-mail, reporting to textbee.dev's accounts. Not on ours.
         "web/components/shared/analytics.tsx",
+        # The floating blue chat bubble: textbee.dev's third-party support widget.
+        "web/components/shared/support-hq-widget.tsx",
     ]:
         stub(rel)
 
