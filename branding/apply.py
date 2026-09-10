@@ -109,7 +109,8 @@ def stub(rel: str) -> None:
         die(f"no exports recognised in {rel}")
     out = ["// Replaced by branding/apply.py: this surface does not exist on a private install.\n"]
     out += [f"export const {n}: any = () => null\n" for n in named]
-    out += [f"export default function {n}() {{\n  return null\n}}\n" for n in default]
+    # Callers may still pass props (e.g. <Analytics user={...} />), so accept anything.
+    out += [f"export default function {n}(_props: any) {{\n  return null\n}}\n" for n in default]
     write(rel, "".join(out))
 
 
