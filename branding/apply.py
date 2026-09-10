@@ -293,10 +293,46 @@ def android() -> None:
         return s
     edit("android/app/src/main/java/com/vernu/sms/ui/theme/Color.kt", colour_kt)
 
+    # Surfaces that only make sense on the public service. Cut before the
+    # string pass below, because the anchors still contain textbee.dev.
+    ui = "android/app/src/main/java/com/vernu/sms/ui"
+
+    # Dashboard: no "Subscription / FREE / Upgrade" card, and no "Explore
+    # Docs" button (the docs are upstream's). The Dashboard button stays.
+    def dashboard(s: str) -> str:
+        s = cut(s, "            SubscriptionCard(\n                subscription = state.subscription,",
+                "                unavailable = state.subscriptionUnavailable\n            )\n", "DashboardScreen.kt")
+        return cut(s, "            OutlinedButton(\n                onClick = {\n                    context.startActivity(\n"
+                      "                        Intent(Intent.ACTION_VIEW, Uri.parse(\"https://textbee.dev/docs\"))",
+                   "                Text(\"Explore Docs\")\n            }\n", "DashboardScreen.kt")
+    edit(f"{ui}/dashboard/DashboardScreen.kt", dashboard)
+
+    # Onboarding: nobody signs up from the phone; the office hands out keys.
+    edit(f"{ui}/onboarding/screens/CredentialsScreen.kt", lambda s: cut(
+        s, "            TextButton(\n                onClick = {\n                    context.startActivity(\n"
+           "                        Intent(Intent.ACTION_VIEW, Uri.parse(\"https://app.textbee.dev/register\"))",
+        "                    text = \"Don't have an account? Sign up free\",\n"
+        "                    style = MaterialTheme.typography.bodySmall\n                )\n            }\n",
+        "CredentialsScreen.kt"))
+
+    def welcome(s: str) -> str:
+        s = cut(s, "        TextButton(\n            onClick = {\n                context.startActivity(\n"
+                   "                    Intent(Intent.ACTION_VIEW, Uri.parse(\"https://app.textbee.dev/register\"))",
+                "                text = \"Don't have an account? Sign up free\",\n"
+                "                style = MaterialTheme.typography.bodySmall\n            )\n        }\n", "WelcomeScreen.kt")
+        # The trailing "textbee.dev" link button and its spacer.
+        return cut(s, "        Spacer(modifier = Modifier.height(8.dp))\n\n        TextButton(\n            onClick = {\n"
+                      "                context.startActivity(\n                    Intent(Intent.ACTION_VIEW, Uri.parse(\"https://textbee.dev\"))",
+                   "                text = \"textbee.dev\",\n                style = MaterialTheme.typography.bodySmall,\n"
+                   "                color = MaterialTheme.colorScheme.onSurfaceVariant\n            )\n        }\n", "WelcomeScreen.kt")
+    edit(f"{ui}/onboarding/screens/WelcomeScreen.kt", welcome)
+
     # Visible strings. Only inside "..." literals, so identifiers such as
     # TextbeeUtils are untouched (they are capitalised anyway).
     subs = [
         ("Create a free account at textbee.dev", "Ask the office for your API key"),
+        # Most specific first, or the bare host swap leaves "/dashboard/dashboard".
+        ("https://app.textbee.dev/dashboard", DASH),
         ("https://app.textbee.dev", DASH),
         ("https://textbee.dev", DASH),
         ("app.textbee.dev/dashboard", HOST),
