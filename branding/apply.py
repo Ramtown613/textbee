@@ -219,18 +219,16 @@ def web() -> None:
         "          />\n"
         "          <span className='font-bold'>__NAME__</span>"
     ).replace("__NAME__", NAME)
+    # The two "Get started" sign-up buttons shown to logged-out visitors.
+    get_started = re.compile(
+        r"\n[ ]*<Button\n[ ]*asChild\n"
+        r"[ ]*className='rounded-full bg-primary text-white hover:bg-primary/90'\n[ ]*>\n"
+        r"[ ]*<Link href=\{Routes\.register\}>Get started</Link>\n[ ]*</Button>"
+    )
+
     def header(s: str) -> str:
         s = rep(s, header_old, header_new, "app-header.tsx")
-        # The two "Get started" sign-up buttons shown to logged-out visitors.
-        s, n = re.subn(
-            r"
-[ ]*<Button
-[ ]*asChild
-[ ]*className='rounded-full bg-primary text-white hover:bg-primary/90'
-[ ]*>
-"
-            r"[ ]*<Link href=\{Routes\.register\}>Get started</Link>
-[ ]*</Button>", "", s)
+        s, n = get_started.subn("", s)
         if n != 2:
             die(f"expected 2 Get-started buttons in app-header.tsx, found {n}")
         return s
