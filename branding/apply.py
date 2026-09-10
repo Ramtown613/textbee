@@ -162,6 +162,9 @@ def web() -> None:
         "web/components/shared/survey-modal.tsx",
         "web/components/shared/join-community-modal.tsx",
         "web/components/shared/footer.tsx",
+        # Google Analytics and Microsoft Clarity session recording, tagged with the
+        # signed-in user's e-mail, reporting to textbee.dev's accounts. Not on ours.
+        "web/components/shared/analytics.tsx",
     ]:
         stub(rel)
 
@@ -216,7 +219,22 @@ def web() -> None:
         "          />\n"
         "          <span className='font-bold'>__NAME__</span>"
     ).replace("__NAME__", NAME)
-    edit("web/components/shared/app-header.tsx", lambda s: rep(s, header_old, header_new, "app-header.tsx"))
+    def header(s: str) -> str:
+        s = rep(s, header_old, header_new, "app-header.tsx")
+        # The two "Get started" sign-up buttons shown to logged-out visitors.
+        s, n = re.subn(
+            r"
+[ ]*<Button
+[ ]*asChild
+[ ]*className='rounded-full bg-primary text-white hover:bg-primary/90'
+[ ]*>
+"
+            r"[ ]*<Link href=\{Routes\.register\}>Get started</Link>
+[ ]*</Button>", "", s)
+        if n != 2:
+            die(f"expected 2 Get-started buttons in app-header.tsx, found {n}")
+        return s
+    edit("web/components/shared/app-header.tsx", header)
 
     def colours(s: str) -> str:
         s = rep(s, "--primary: 21 90% 48%;", f"--primary: {NAVY_HSL};", "main.css")
