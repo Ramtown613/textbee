@@ -30,6 +30,7 @@ on:
       - 'api/**'
       - 'web/**'
       - '.github/workflows/ramtown-release.yaml'
+      - 'branding/**'
   workflow_dispatch:
 
 permissions:
@@ -86,9 +87,12 @@ jobs:
           grep -q 'https://api.textbee.dev/api/v1/' "$f"
           sed -i "s#https://api.textbee.dev/api/v1/#${API_URL}/api/v1/#" "$f"
           sed -i 's#resValue "string", "app_name", "textbee.dev"$#resValue "string", "app_name", "Ramtown SMS"#' "$f"
-          # In-app links to the hosted dashboard go to ours instead.
-          grep -rl 'https://app.textbee.dev' android/app/src/main | xargs -r sed -i "s#https://app.textbee.dev#${WEB_URL}#g"
           echo "API_BASE_URL now:"; grep 'API_BASE_URL' "$f"
+
+      - name: Apply Ramtown branding
+        env:
+          FORK_REPO: ${{ github.repository }}
+        run: python3 branding/apply.py android
 
       - name: Write Firebase config
         env:
@@ -166,6 +170,11 @@ jobs:
           echo "api=ghcr.io/${owner}/textbee/api" >> "$GITHUB_OUTPUT"
           echo "web=ghcr.io/${owner}/textbee/web" >> "$GITHUB_OUTPUT"
           echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Apply Ramtown branding
+        env:
+          FORK_REPO: ${{ github.repository }}
+        run: python3 branding/apply.py web
 
       - name: Bake dashboard URLs
         # Next.js reads web/.env during `pnpm build` inside the Dockerfile.
