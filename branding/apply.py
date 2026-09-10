@@ -102,8 +102,9 @@ def edit(rel: str, fn) -> None:
 def stub(rel: str) -> None:
     """Replace a React component module with exports that render nothing."""
     s = read(rel)
-    default = re.findall(r"^export default function (\w+)", s, re.M)
-    named = re.findall(r"^export (?:const|function) (\w+)", s, re.M)
+    # `export default function X`, `export default X`, `export const X`, `export function X`
+    default = re.findall(r"^export default (?:function )?(\w+)", s, re.M)
+    named = [n for n in re.findall(r"^export (?:const|function) (\w+)", s, re.M) if n not in default]
     if not default and not named:
         die(f"no exports recognised in {rel}")
     out = ["// Replaced by branding/apply.py: this surface does not exist on a private install.\n"]
